@@ -22,25 +22,51 @@ POWERSHELL="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
 SUDO_DOCKERD="%docker ALL=(ALL)  NOPASSWD: /usr/bin/dockerd"
 
 confirm () {
-  read -p "${1}Is this OK [Y/n/q]:" -n 1
+  printf "%sIs this OK [Y/n/q]:" "$1"
+  read -r REPLY
   echo
   case "$REPLY" in
-    q|Q) echo "Ending script now at user's request."
+    q*|Q*) echo "Ending script now at user's request."
       exit 1 ;;
-    n|N) echo "Skipping at user's request."
+    n*|N*) echo "Skipping at user's request."
       return 1 ;;
     *) return 0 ;;
   esac
 }
 
+confedit () {
+  section=$1
+  key=$2
+  value=$3
+  filename="/etc/wsl.conf"
+  tempconf=$(mktemp)
+
+  cp -p "$filename" "$tempconf"
+
+  # normalize line spacing
+  CONF=$(sed '/^$/d' "$tempconf" | sed '2,$ s/^\[/\n\[/g')"\n\n"
+
+  if printf "%s" "$CONF" | grep -qF "[$section]" ; then
+    if printf "%s" "$CONF" | sed -n "/^\[$section\]$/,/^$/p" | grep -q "^$key" ; then
+      CONF=$(printf "%s" "$CONF" | sed "/^\[$section\]$/,/^$/ s/^$key\s*=.\+/$key = $value/")"\n\n"
+    else
+      CONF=$(printf "%s" "$CONF" | sed "/^\[$section\]$/,/^$/ s/^$/$key = $value\n/")"\n\n"
+    fi
+  else
+    CONF="${CONF}[$section]\n$key = $value\n\n"
+  fi
+  printf "%s" "$CONF" > "$tempconf" && mv "$tempconf" "$filename"
+}
+
 # If root, query for username
-if [ $USER = "root" ]; then
-  read -p 'Non-root username to use: ' USERNAME
+if [ "$USER" = "root" ]; then
+  printf 'Non-root username to use: '
+  read -r USERNAME
   getent passwd | grep -q "^$USERNAME:" && unset NEW_USER || NEW_USER="true"
   SUDO=""
 else
   USERNAME=$USER
-  if ! groups $USERNAME | grep -qEw "sudo|wheel" ; then
+  if ! groups "$USERNAME" | grep -qEw "sudo|wheel" ; then
     echo "Unfortunately, sudo is not configured correctly for user $USERNAME."
     echo "Please try switching to a sudo-enabled user, or correctly configuring"
     echo 'sudo with the command "visudo".'
@@ -54,13 +80,13 @@ if ! nslookup -timeout=2 google.com > /dev/null ; then
   confirm "This script will now edit your resolv.conf. " || exit 1
   $SUDO unlink /etc/resolv.conf 
   echo "nameserver 1.1.1.1" | $SUDO tee /etc/resolv.conf
-  echo -e "[network]\ngenerateResolvConf = false" | $SUDO tee -a /etc/wsl.conf
+  printf "[network]\ngenerateResolvConf = false\n\n" | $SUDO tee -a /etc/wsl.conf
 fi
 
 # Get distro info so that ID=distro
 . /etc/os-release
 
-if ! echo "$ID" | grep -Ew 'fedora|alpine|debian|ubuntu' ; then
+if ! echo "$ID" | grep -qEw 'fedora|alpine|debian|ubuntu' ; then
   echo
   echo "This script is built to support Alpine, Debian, Fedora, or Ubuntu distributions."
   echo "You are using $ID."
@@ -109,11 +135,11 @@ fi
 
 
 SUDO_GROUP=$(getent group | grep -Eo "^(wheel|sudo)\b")
-if ! groups $USERNAME | grep -qw "$SUDO_GROUP" ; then
+if ! groups "$USERNAME" | grep -qw "$SUDO_GROUP" ; then
   echo
   echo "Adding $USERNAME to group $SUDO_GROUP now."
   if confirm ; then
-    if command -v usermod > /dev/null 2&>1 ; then
+    if command -v usermod > /dev/null 2>&1 ; then
       $SUDO usermod -aG "$SUDO_GROUP" "$USERNAME"
     else
       $SUDO addgroup "$USERNAME" "$SUDO_GROUP"
@@ -122,7 +148,8 @@ if ! groups $USERNAME | grep -qw "$SUDO_GROUP" ; then
 fi
 
 SUDOERS="%$SUDO_GROUP ALL=(ALL) ALL" 
-if ! $SUDO sh -c "EDITOR=cat visudo 2> /dev/null" | grep -q "$(echo ^$SUDOERS | sed 's/\s\+/\\s\\+/g')" ; then
+NORMALIZED=$(echo "$SUDOERS" | sed 's/\s\+/\\s\\+/g')
+if ! "$SUDO" sh -c 'EDITOR=cat visudo 2> /dev/null' | grep -q "^$NORMALIZED" ; then
   echo
   echo "Enabling sudo access for everyone in group $SUDO_GROUP."
   if confirm ; then
@@ -143,7 +170,20 @@ if [ "$DOCKER_GID" != "$CURRENT_DOCKER_GID" ] ; then
   fi
 fi
 
-if ! $SUDO sh -c "EDITOR=cat visudo 2> /dev/null" | grep -q "$(echo ^$SUDO_DOCKERD | sed 's/\s\+/\\s\\+/g')"; then
+if ! groups "$USERNAME" | grep -qw "docker" ; then
+  echo
+  echo "Adding $USERNAME to group docker now."
+  if confirm ; then
+    if command -v usermod > /dev/null 2>&1 ; then
+      $SUDO usermod -aG docker "$USERNAME"
+    else
+      $SUDO addgroup "$USERNAME" docker
+    fi
+  fi
+fi
+
+NORMALIZED=$(echo "$SUDO_DOCKERD" | sed 's/\s\+/\\s\\+/g')
+if ! "$SUDO" sh -c 'EDITOR=cat visudo 2> /dev/null' | grep -q "^$NORMALIZED"; then
   echo
   echo "Enabling passwordless sudo access to launch dockerd for everyone in group docker."
   if confirm ; then
@@ -151,13 +191,55 @@ if ! $SUDO sh -c "EDITOR=cat visudo 2> /dev/null" | grep -q "$(echo ^$SUDO_DOCKE
   fi
 fi
 
-USERID=$(id -u $USERNAME)
+USERID=$(id -u "$USERNAME")
 DISTRO_REGISTRY=$($POWERSHELL "Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss\*\ DistributionName | Where-Object -Property DistributionName -eq $WSL_DISTRO_NAME | select -exp PSPath" | tr -d '\r\n')
 DEFAULT_UID=$($POWERSHELL "Get-ItemProperty '$DISTRO_REGISTRY' -Name DefaultUid | select -exp DefaultUid" | tr -d '\r\n')
-if [ $USERID != $DEFAULT_UID ] ; then
+if [ "$USERID" != "$DEFAULT_UID" ] ; then
   echo
   echo "Setting $USERNAME as default user for WSL distro $WSL_DISTRO_NAME."
   if confirm ; then
     $POWERSHELL "Set-ItemProperty '$DISTRO_REGISTRY' -Name DefaultUid -Value $USERID"
   fi
+fi
+
+
+if ! grep -q '/mnt/wsl' "/etc/docker/daemon.json" ; then
+  DOCKERD_CONFIG='{\n  "hosts": ["unix:///mnt/wsl/shared-docker/docker.sock"]'
+  [ "$ID" = "debian" ] && DOCKERD_CONFIG="${DOCKERD_CONFIG},\n  \"iptables\": false"
+  DOCKERD_CONFIG="${DOCKERD_CONFIG}\n}"
+  echo
+  printf "%s" "$DOCKERD_CONFIG"
+  echo "A new /etc/docker/daemon.json will be created or overwritten with the above contents."
+  if [ -r "/etc/docker/daemon.json" ] ; then
+    echo "This will replace the existing file, which currently contains:"
+    cat "/etc/docker/daemon.json"
+  fi
+  confirm && printf "%s" "$DOCKERD_CONFIG" | $SUDO tee "/etc/docker/daemon.json"
+fi
+
+HOMEDIR=$(getent passwd | grep -w "$USERNAME" | cut -d: -f6)
+LAUNCHER_DIR="$HOMEDIR/.local/bin"
+LAUNCHER="$LAUNCHER_DIR/docker-service.sh"
+LAUNCHER_TEMP=$(mktemp)
+printf "#!/bin/sh\n\nDOCKER_DISTRO='%s'\n" "$WSL_DISTRO_NAME" > "$LAUNCHER_TEMP"
+cat <<-'EOF' >> "$LAUNCHER_TEMP"
+DOCKER_DIR=/mnt/wsl/shared-docker
+DOCKER_SOCK="$DOCKER_DIR/docker.sock"
+export DOCKER_HOST="unix://$DOCKER_SOCK"
+if [ ! -S "$DOCKER_SOCK" ]; then
+    mkdir -pm o=,ug=rwx "$DOCKER_DIR"
+    chgrp docker "$DOCKER_DIR"
+    /mnt/c/Windows/System32/wsl.exe -d $DOCKER_DISTRO sh -c "nohup sudo -b dockerd < /dev/null > $DOCKER_DIR/dockerd.log 2>&1"
+fi
+EOF
+
+echo
+echo "Adding $LAUNCHER startup script now, with these contents:"
+cat "$LAUNCHER_TEMP"
+
+if [ ! -r "$LAUNCHER" ] && confirm ; then
+  mkdir -p "$LAUNCHER_DIR"
+  mv "$LAUNCHER_TEMP" "$LAUNCHER"
+  chmod u=rwx,g=rx,o= "$LAUNCHER"
+  chgrp docker "$LAUNCHER"
 fi
