@@ -220,6 +220,7 @@ if ! grep -q '/mnt/wsl' "/etc/docker/daemon.json" ; then
     cat "/etc/docker/daemon.json"
   fi
   confirm && echo "$DOCKERD_CONFIG" | $SUDO tee "/etc/docker/daemon.json"
+  $SUDO chgrp docker "/etc/docker/daemon.json"
 fi
 
 HOMEDIR=$(getent passwd | grep -w "$USERNAME" | cut -d: -f6)
@@ -232,7 +233,7 @@ DOCKER_DIR=/mnt/wsl/shared-docker
 DOCKER_SOCK="$DOCKER_DIR/docker.sock"
 export DOCKER_HOST="unix://$DOCKER_SOCK"
 if [ ! -S "$DOCKER_SOCK" ]; then
-    mkdir -pm o=,ug=rwx "$DOCKER_DIR"
+    sudo mkdir -pm o=,ug=rwx "$DOCKER_DIR"
     sudo chgrp docker "$DOCKER_DIR"
     "${WIN_ROOT}"c/Windows/System32/wsl.exe -d $DOCKER_DISTRO sh -c "nohup sudo -b dockerd < /dev/null > $DOCKER_DIR/dockerd.log 2>&1"
 fi
