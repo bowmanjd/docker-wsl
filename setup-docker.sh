@@ -105,13 +105,13 @@ if confirm ; then
        $SUDO dnf install dnf-plugins-core sudo passwd cracklib-dicts
        $SUDO dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
        $SUDO dnf install docker-ce docker-ce-cli containerd.io
-       
      ;;
-     "debian|ubuntu") $SUDO apt-get update
+     "debian"|"ubuntu") $SUDO apt-get update
        $SUDO apt-get upgrade -y
        $SUDO apt-get remove -y docker docker-engine docker.io containerd runc
        $SUDO apt-get install -y --no-install-recommends apt-transport-https ca-certificates curl gnupg2 sudo passwd
-       echo "deb [arch=amd64] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" | $SUDO tee /etc/apt/sources.list.d/docker.list
+       curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+       echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" | $SUDO tee /etc/apt/sources.list.d/docker.list
        $SUDO apt update
        $SUDO apt install docker-ce docker-ce-cli containerd.io
      ;;
