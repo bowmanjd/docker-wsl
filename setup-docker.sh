@@ -18,7 +18,12 @@
 
 DOCKER_GID=36257
 
-POWERSHELL="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+# Check for mount point being modified in wsl.conf
+WIN_ROOT=$(awk -F "=" '/root/ {print $2}' /etc/wsl.conf | tr -d ' ')
+if [ -z "$WIN_ROOT" ]; then
+  WIN_ROOT=/mnt/
+fi
+POWERSHELL="${WIN_ROOT}c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
 SUDO_DOCKERD="%docker ALL=(ALL)  NOPASSWD: /usr/bin/dockerd"
 
 confirm () {
@@ -110,7 +115,7 @@ if confirm ; then
        $SUDO apt-get upgrade -y
        $SUDO apt-get remove -y docker docker-engine docker.io containerd runc
        $SUDO apt-get install -y --no-install-recommends apt-transport-https ca-certificates curl gnupg2 sudo passwd
-       curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+       $SUDO curl -fsSL https://download.docker.com/linux/ubuntu/gpg | $SUDO gpg --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" | $SUDO tee /etc/apt/sources.list.d/docker.list
        $SUDO apt update
        $SUDO apt install docker-ce docker-ce-cli containerd.io
@@ -214,22 +219,22 @@ if ! grep -q '/mnt/wsl' "/etc/docker/daemon.json" ; then
     echo "This will replace the existing file, which currently contains:"
     cat "/etc/docker/daemon.json"
   fi
-  confirm && printf "%s" "$DOCKERD_CONFIG" | $SUDO tee "/etc/docker/daemon.json"
+  confirm && echo "$DOCKERD_CONFIG" | $SUDO tee "/etc/docker/daemon.json"
 fi
 
 HOMEDIR=$(getent passwd | grep -w "$USERNAME" | cut -d: -f6)
 LAUNCHER_DIR="$HOMEDIR/.local/bin"
 LAUNCHER="$LAUNCHER_DIR/docker-service.sh"
 LAUNCHER_TEMP=$(mktemp)
-printf "#!/bin/sh\n\nDOCKER_DISTRO='%s'\n" "$WSL_DISTRO_NAME" > "$LAUNCHER_TEMP"
+printf "#!/bin/sh\n\nDOCKER_DISTRO='%s'\nWIN_ROOT='%s'\n" "$WSL_DISTRO_NAME" "$WIN_ROOT"> "$LAUNCHER_TEMP"
 cat <<-'EOF' >> "$LAUNCHER_TEMP"
 DOCKER_DIR=/mnt/wsl/shared-docker
 DOCKER_SOCK="$DOCKER_DIR/docker.sock"
 export DOCKER_HOST="unix://$DOCKER_SOCK"
 if [ ! -S "$DOCKER_SOCK" ]; then
     mkdir -pm o=,ug=rwx "$DOCKER_DIR"
-    chgrp docker "$DOCKER_DIR"
-    /mnt/c/Windows/System32/wsl.exe -d $DOCKER_DISTRO sh -c "nohup sudo -b dockerd < /dev/null > $DOCKER_DIR/dockerd.log 2>&1"
+    sudo chgrp docker "$DOCKER_DIR"
+    "${WIN_ROOT}"c/Windows/System32/wsl.exe -d $DOCKER_DISTRO sh -c "nohup sudo -b dockerd < /dev/null > $DOCKER_DIR/dockerd.log 2>&1"
 fi
 EOF
 
@@ -241,5 +246,5 @@ if [ ! -r "$LAUNCHER" ] && confirm ; then
   mkdir -p "$LAUNCHER_DIR"
   mv "$LAUNCHER_TEMP" "$LAUNCHER"
   chmod u=rwx,g=rx,o= "$LAUNCHER"
-  chgrp docker "$LAUNCHER"
+  sudo chgrp docker "$LAUNCHER"
 fi
